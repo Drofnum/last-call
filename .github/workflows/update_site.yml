@@ -1,0 +1,89 @@
+name: Update Website Content
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'web/**'
+  workflow_dispatch:
+
+jobs:
+  update-site:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Get bucket name
+        id: get_bucket
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "BUCKET_NAME=lcm-challenge-${ACCOUNT_ID}" >> $GITHUB_ENV
+          echo "Account ID: $ACCOUNT_ID, Bucket name: lcm-challenge-${ACCOUNT_ID}"
+
+      - name: Verify S3 bucket exists
+        run: |
+          if aws s3api head-bucket --bucket ${{ env.BUCKET_NAME }} 2>/dev/null; then
+            echo "Bucket ${{ env.BUCKET_NAME }} exists and is accessible"
+          else
+            echo "Warning: Bucket ${{ env.BUCKET_NAME }} does not exist or is not accessible"
+            echo "Running main deployment workflow instead to create all resources..."
+            exit 1
+          fi
+
+      - name: Upload website content to S3
+        run: |
+          aws s3 sync web/ s3://${{ env.BUCKET_NAME }}/ --delete
+          echo "Website content uploaded to s3://${{ env.BUCKET_NAME }}/"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          # Get the distribution ID that's associated with our bucket
+          DISTRIBUTIONS=$(aws cloudfront list-distributions --query "DistributionList.Items[*].[Id,Origins.Items[0].DomainName]" --output text)
+          
+          # Find the distribution that matches our bucket
+          BUCKET_DOMAIN="${{ env.BUCKET_NAME }}"
+          DISTRIBUTION_ID=""
+          
+          echo "Looking for CloudFront distribution associated with $BUCKET_DOMAIN"
+          echo "Available distributions and domains:"
+          echo "$DISTRIBUTIONS"
+          
+          while read -r ID DOMAIN; do
+            echo "Checking distribution $ID with domain $DOMAIN"
+            if [[ "$DOMAIN" == *"$BUCKET_DOMAIN"* ]]; then
+              DISTRIBUTION_ID="$ID"
+              echo "Match found for distribution $ID"
+              break
+            fi
+          done <<< "$DISTRIBUTIONS"
+          
+          if [ -n "$DISTRIBUTION_ID" ]; then
+            echo "Found CloudFront distribution: $DISTRIBUTION_ID"
+            aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"
+            echo "CloudFront cache invalidated for distribution $DISTRIBUTION_ID"
+          else
+            echo "No CloudFront distribution found for bucket ${{ env.BUCKET_NAME }}"
+            
+            # Fallback method to get all distributions and try to find the one we need
+            echo "Trying alternative approach to find CloudFront distribution..."
+            DISTRIBUTION_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?contains(Origins.Items[0].DomainName, '${{ env.BUCKET_NAME }}')].Id" --output text | head -n 1)
+            
+            if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
+              echo "Found distribution via alternative method: $DISTRIBUTION_ID"
+              aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"
+              echo "CloudFront cache invalidated for distribution $DISTRIBUTION_ID"
+            else
+              echo "Could not find the CloudFront distribution with any method."
+              echo "This may be the first deployment or the CloudFront distribution might have a different configuration."
+              echo "The site content has been updated but cached content might take time to update."
+            fi
+          fi 
