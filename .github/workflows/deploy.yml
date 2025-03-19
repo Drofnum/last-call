@@ -34,7 +34,7 @@ jobs:
 
           // Configure authentication
           const authUser = 'lcm-user';
-          const authPass = ${{ secrets.AUTH_PASSWORD }};
+          const authPass = '${{ secrets.AUTH_PASSWORD }}';
 
           // Set up the auth string
           const authString = `Basic ${Buffer.from(`${authUser}:${authPass}`).toString('base64')}`;
