@@ -18,7 +18,8 @@ The solution consists of:
 ## Security Considerations
 
 In a production environment, I would make these improvements:
-- Store credentials in AWS Secrets Manager and load them dynamically
+- Store credentials in AWS Secrets Manager and load them dynamically(currently in github actions secrets which is secure but a move to SSM would be my preferred option)
+- Would not put creds in a readme/solutions file
 - Add WAF rules to protect against common web attacks
 - Configure more restrictive bucket policies and IAM roles
 - Implement proper SSL certificates (currently using CloudFront's default)
